@@ -18,7 +18,22 @@ class MSQueueWithConstantTimeRemove<E> : QueueWithRemove<E> {
         // TODO: When adding a new node, check whether
         // TODO: the previous tail is logically removed.
         // TODO: If so, remove it physically from the linked list.
-        TODO("Implement me!")
+
+        while (true) {
+            val curTail = tail.value
+            val node = Node(element, curTail)
+
+            if (curTail.next.compareAndSet(null, node)) {
+                if (tail.compareAndSet(curTail, node)) {
+                    if (curTail.extractedOrRemoved && curTail != head.value) curTail.removePhysic()
+                }
+                return
+            } else {
+                val next = curTail.next.value ?: continue
+                tail.compareAndSet(curTail, next)
+                if (curTail.extractedOrRemoved && curTail != head.value) curTail.removePhysic()
+            }
+        }
     }
 
     override fun dequeue(): E? {
@@ -26,7 +41,18 @@ class MSQueueWithConstantTimeRemove<E> : QueueWithRemove<E> {
         // TODO: mark the node that contains the extracting
         // TODO: element as "extracted or removed", restarting
         // TODO: the operation if this node has already been removed.
-        TODO("Implement me!")
+
+        while (true) {
+            val curHead = head.value
+            val curHeadNext = curHead.next.value ?: return null
+
+            if (head.compareAndSet(curHead, curHeadNext)) {
+                curHeadNext.prev.getAndSet(null)
+                if (curHeadNext.markExtractedOrRemoved()) {
+                    return curHeadNext.element
+                }
+            }
+        }
     }
 
     override fun remove(element: E): Boolean {
@@ -102,7 +128,7 @@ class MSQueueWithConstantTimeRemove<E> : QueueWithRemove<E> {
         return nodes.joinToString(", ")
     }
 
-    private class Node<E>(
+    private inner class Node<E>(
         var element: E?,
         prev: Node<E>?
     ) {
@@ -139,7 +165,34 @@ class MSQueueWithConstantTimeRemove<E> : QueueWithRemove<E> {
             // TODO: it is totally fine to have a bounded number of removed nodes
             // TODO: in the linked list, especially when it significantly simplifies
             // TODO: the algorithm.
-            TODO("Implement me!")
+
+            if (markExtractedOrRemoved()) {
+
+                removePhysic()
+
+                return true
+            }
+            return false
+        }
+
+        fun removePhysic() {
+            if (this == tail.value) return
+            if (this == head.value) return
+            if (this.next.value == null) return
+
+            val prevNode = findPrev() ?: return
+            val nextNode = next.value
+            prevNode.next.getAndSet(nextNode)
+            if (nextNode != null) {
+                val nextNodePrev = nextNode.prev.getAndSet(prevNode)
+                if (nextNodePrev == null) nextNode.prev.getAndSet(null)
+            }
+            if (prevNode.extractedOrRemoved) prevNode.removePhysic()
+            if (nextNode != null && nextNode.extractedOrRemoved) nextNode.removePhysic()
+        }
+
+        private fun findPrev(): Node<E>? {
+            return prev.value
         }
     }
 }

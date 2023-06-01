@@ -2,9 +2,7 @@
 
 package day3
 
-import day1.MSQueue
 import kotlinx.atomicfu.*
-import java.util.logging.Logger
 
 class MSQueueWithLinearTimeRemove<E> : QueueWithRemove<E> {
     private val head: AtomicRef<Node>
@@ -28,13 +26,13 @@ class MSQueueWithLinearTimeRemove<E> : QueueWithRemove<E> {
 
             if (curTail.next.compareAndSet(null, node)) {
                 if (tail.compareAndSet(curTail, node)) {
-                    if (curTail.extractedOrRemoved) curTail.removePhysic()
+                    if (curTail.extractedOrRemoved && curTail != head.value) curTail.removePhysic()
                 }
                 return
             } else {
                 val next = curTail.next.value ?: continue
                 tail.compareAndSet(curTail, next)
-                if (curTail.extractedOrRemoved) curTail.removePhysic()
+                if (curTail.extractedOrRemoved && curTail != head.value) curTail.removePhysic()
             }
         }
     }
@@ -146,8 +144,6 @@ class MSQueueWithLinearTimeRemove<E> : QueueWithRemove<E> {
             // TODO: the algorithm simpler. In case a tail node is logically removed,
             // TODO: it will be removed physically by `enqueue(..)`.
             if (markExtractedOrRemoved()) {
-                if (this == tail.value) return true
-                if (this == head.value) return true
 
                 removePhysic()
 
@@ -157,18 +153,23 @@ class MSQueueWithLinearTimeRemove<E> : QueueWithRemove<E> {
         }
 
         fun removePhysic() {
-            while (true) {
-                var prevNode = head.value
-                val nextNode = next.value ?: return
-                while (prevNode.next.value !== this) {
-                    prevNode = prevNode.next.value ?: return
-                }
-                if (prevNode.extractedOrRemoved) continue
-                prevNode.next.getAndSet(nextNode)
-                prevNode.next.value
-                if (prevNode.extractedOrRemoved) prevNode.remove()
-                if (nextNode.extractedOrRemoved) nextNode.remove()
+            if (this == tail.value) return
+            if (this == head.value) return
+            if (this.next.value == null) return
+
+            val prevNode = findPrev() ?: return
+            val nextNode = next.value
+            prevNode.next.getAndSet(nextNode)
+            if (prevNode.extractedOrRemoved) prevNode.removePhysic()
+            if (nextNode != null && nextNode.extractedOrRemoved) nextNode.removePhysic()
+        }
+
+        private fun findPrev(): Node? {
+            var prevNode = head.value
+            while (prevNode.next.value !== this) {
+                prevNode = prevNode.next.value ?: return null
             }
+            return prevNode
         }
     }
 }
