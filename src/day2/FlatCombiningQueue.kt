@@ -37,7 +37,7 @@ class FlatCombiningQueue<E> : Queue<E> {
                 val operation = Operation(element)
                 // try to get cell
                 if (tasksForCombiner[index].compareAndSet(null, operation)) {
-                    // now this is out cell - we need to release it
+                    // now this is our cell - we need to release it
                     while (true) {
                         // got lock
                         if (combinerLock.compareAndSet(expect = false, update = true)) {

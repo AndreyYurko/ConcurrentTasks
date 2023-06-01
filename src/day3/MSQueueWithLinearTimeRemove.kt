@@ -25,14 +25,13 @@ class MSQueueWithLinearTimeRemove<E> : QueueWithRemove<E> {
             val curTail = tail.value
 
             if (curTail.next.compareAndSet(null, node)) {
-                if (tail.compareAndSet(curTail, node)) {
-                    if (curTail.extractedOrRemoved && curTail != head.value) curTail.removePhysic()
-                }
+                tail.compareAndSet(curTail, node)
+                if (curTail.extractedOrRemoved) curTail.removePhysic()
                 return
             } else {
                 val next = curTail.next.value ?: continue
                 tail.compareAndSet(curTail, next)
-                if (curTail.extractedOrRemoved && curTail != head.value) curTail.removePhysic()
+                if (curTail.extractedOrRemoved) curTail.removePhysic()
             }
         }
     }

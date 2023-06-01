@@ -128,7 +128,7 @@ class MSQueueWithConstantTimeRemove<E> : QueueWithRemove<E> {
         return nodes.joinToString(", ")
     }
 
-    private inner class Node<E>(
+    private class Node<E>(
         var element: E?,
         prev: Node<E>?
     ) {
@@ -142,7 +142,7 @@ class MSQueueWithConstantTimeRemove<E> : QueueWithRemove<E> {
         private val _extractedOrRemoved = atomic(false)
         val extractedOrRemoved get() = _extractedOrRemoved.value
 
-        fun markExtractedOrRemoved(): Boolean = _extractedOrRemoved.compareAndSet(false, true)
+        fun markExtractedOrRemoved(): Boolean = _extractedOrRemoved.compareAndSet(expect = false, update = true)
 
         /**
          * Removes this node from the queue structure.
@@ -176,16 +176,18 @@ class MSQueueWithConstantTimeRemove<E> : QueueWithRemove<E> {
         }
 
         fun removePhysic() {
-            if (this == tail.value) return
-            if (this == head.value) return
             if (this.next.value == null) return
+            if (this.prev.value == null) return
+            //if (this == head.value) return
 
             val prevNode = findPrev() ?: return
             val nextNode = next.value
             prevNode.next.getAndSet(nextNode)
             if (nextNode != null) {
-                val nextNodePrev = nextNode.prev.getAndSet(prevNode)
-                if (nextNodePrev == null) nextNode.prev.getAndSet(null)
+                while (true) {
+                    val curNextNode = nextNode.prev.value ?: break
+                    if (nextNode.prev.compareAndSet(curNextNode, prevNode)) break
+                }
             }
             if (prevNode.extractedOrRemoved) prevNode.removePhysic()
             if (nextNode != null && nextNode.extractedOrRemoved) nextNode.removePhysic()
