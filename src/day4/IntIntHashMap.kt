@@ -1,6 +1,8 @@
 package day4
 
 import kotlinx.atomicfu.*
+import java.util.logging.Level
+import java.util.logging.Logger
 
 /**
  * Int-to-Int hash map with open addressing and linear probes.
@@ -59,6 +61,7 @@ class IntIntHashMap {
         // Pairs of <key, value> here, the actual
         // size of the map is twice as big.
         val map = AtomicIntArray(2 * capacity)
+        val next = atomic<Core?>(null)
         val shift: Int
 
         init {
@@ -70,47 +73,140 @@ class IntIntHashMap {
         fun getInternal(key: Int): Int {
             var index = index(key)
             var probes = 0
-            while (map[index].value != key) { // optimize for successful lookup
-                if (map[index].value == NULL_KEY) return NULL_VALUE // not found -- no value
-                if (++probes >= MAX_PROBES) return NULL_VALUE
-                if (index == 0) index = map.size
-                index -= 2
+            while(true) {
+                when (map[index].value) {
+                    NULL_KEY -> return NULL_VALUE
+                    key -> break
+                    else -> {
+                        if (++probes >= MAX_PROBES) return NULL_VALUE
+                        if (index == 0) index = map.size
+                        index -= 2
+                        continue
+                    }
+                }
             }
-            // found key -- return value
-            return map[index + 1].value
+
+            // found key -- find value
+            val curValue = map[index + 1].value
+            return when {
+                curValue == TRANSFERRED_VALUE -> {
+                    next.value!!.getInternal(key)
+                }
+                curValue < 0 -> {
+                    -curValue
+                }
+                else -> {
+                    curValue
+                }
+            }
         }
 
         fun putInternal(key: Int, value: Int): Int {
             var index = index(key)
             var probes = 0
-            while (map[index].value != key) { // optimize for successful lookup
-                if (map[index].value == NULL_KEY) {
-                    // not found -- claim this slot
-                    if (value == DEL_VALUE) return NULL_VALUE // remove of missing item, no need to claim slot
-                    map[index].value = key
-                    break
+
+            while (true) {
+                when (map[index].value) {
+                    NULL_KEY -> {
+                        // not found -- claim this slot
+                        if (value == DEL_VALUE) return NULL_VALUE // remove of missing item, no need to claim slot
+                        if (map[index].compareAndSet(NULL_KEY, key)) break
+                        else continue
+                    }
+                    key -> break
+                    else -> {
+                        if (++probes >= MAX_PROBES) return NEEDS_REHASH
+                        if (index == 0) index = map.size
+                        index -= 2
+                        continue
+                    }
                 }
-                if (++probes >= MAX_PROBES) return NEEDS_REHASH
-                if (index == 0) index = map.size
-                index -= 2
             }
+
             // found key -- update value
-            val oldValue = map[index + 1].value
-            map[index + 1].value = value
-            return oldValue
+            while (true) {
+                val oldValue = map[index + 1].value
+                return when {
+                    oldValue == TRANSFERRED_VALUE -> {
+                        next.value!!.putInternal(key, value)
+                        //next.value!!.putInternal(key, value)
+                    }
+
+                    oldValue < 0 -> {
+                        val setValue = if (value != DEL_VALUE) -value else NULL_VALUE
+
+                        if (!map[index + 1].compareAndSet(oldValue, setValue)) continue
+                        -oldValue
+                    }
+
+                    else -> {
+                        if (value != DEL_VALUE) {
+                            if (!map[index + 1].compareAndSet(oldValue, value)) continue
+                        }
+                        else {
+                            if (!map[index + 1].compareAndSet(oldValue, NULL_VALUE)) continue
+                        }
+                        oldValue
+                    }
+                }
+            }
         }
 
         fun rehash(): Core {
+            // create new core and try to set it
             val newCore = Core(map.size) // map.length is twice the current capacity
+            next.compareAndSet(null, newCore)
+
+            // for each cell in map perform transfer
             var index = 0
             while (index < map.size) {
-                if (isValue(map[index + 1].value)) {
-                    val result = newCore.putInternal(map[index].value, map[index + 1].value)
-                    assert(result == 0) { "Unexpected result during rehash: $result" }
+                // get up-to-date core
+                val nextCore = next.value!!
+
+                // get current key and value
+                val curKey = map[index].value
+                val curValue = map[index+1].value
+                when {
+                    // value already transferred
+                    curValue == TRANSFERRED_VALUE -> {
+                        break
+                    }
+                    // empty cell, no physical transfer needed
+                    curValue == NULL_VALUE -> {
+                        map[index + 1].compareAndSet(curValue, TRANSFERRED_VALUE)
+                        continue
+                    }
+                    // cell not marked, need to mark it
+                    // negative value is the mark for fixed value
+                    curValue > 0 -> {
+                        map[index + 1].compareAndSet(curValue, -curValue)
+                        continue
+                    }
+                    // physically transfer value
+                    curValue < 0 -> {
+
+                        // put pair in next core
+                        // on failure update next to new core
+                        while (true) {
+                            val result = nextCore.putInternal(curKey, -curValue)
+                            if (result != NEEDS_REHASH) break
+                            next.compareAndSet(nextCore, nextCore.rehash())
+                            continue
+                        }
+
+                        // mark next values
+                        map[index+1].compareAndSet(curValue, TRANSFERRED_VALUE)
+                        if (map[index+1].value == TRANSFERRED_VALUE) break
+
+                        continue
+                    }
                 }
                 index += 2
             }
-            return newCore
+            //var state = ""
+            //(0 until map.size).forEach {i -> state = state + next.value!!.map[i].value + ", " }
+            //Logger.getLogger("core").log(Level.INFO, state)
+            return next.value!!
         }
 
         /**
@@ -127,6 +223,7 @@ private const val NULL_KEY = 0 // missing key (initial value)
 private const val NULL_VALUE = 0 // missing value (initial value)
 private const val DEL_VALUE = Int.MAX_VALUE // mark for removed value
 private const val NEEDS_REHASH = -1 // returned by `putInternal` to indicate that rehash is needed
+private const val TRANSFERRED_VALUE = Int.MIN_VALUE
 
 // Checks is the value is in the range of allowed values
 private fun isValue(value: Int): Boolean = value in (1 until DEL_VALUE)
