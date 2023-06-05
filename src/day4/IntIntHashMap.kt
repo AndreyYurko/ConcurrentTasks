@@ -1,14 +1,12 @@
 package day4
 
 import kotlinx.atomicfu.*
-import java.util.logging.Level
-import java.util.logging.Logger
 
 /**
  * Int-to-Int hash map with open addressing and linear probes.
  */
 class IntIntHashMap {
-    private var core = Core(INITIAL_CAPACITY)
+    private val core = atomic(Core(INITIAL_CAPACITY))
 
     /**
      * Returns value for the corresponding key or zero if this key is not present.
@@ -19,7 +17,7 @@ class IntIntHashMap {
      */
     operator fun get(key: Int): Int {
         require(key > 0) { "Key must be positive: $key" }
-        return toValue(core.getInternal(key))
+        return toValue(core.value.getInternal(key))
     }
 
     /**
@@ -51,9 +49,10 @@ class IntIntHashMap {
 
     private fun putAndRehashWhileNeeded(key: Int, value: Int): Int {
         while (true) {
-            val oldValue = core.putInternal(key, value)
+            val curCore = core.value
+            val oldValue = curCore.putInternal(key, value)
             if (oldValue != NEEDS_REHASH) return oldValue
-            core = core.rehash()
+            core.compareAndSet(curCore, curCore.rehash())
         }
     }
 
@@ -73,17 +72,14 @@ class IntIntHashMap {
         fun getInternal(key: Int): Int {
             var index = index(key)
             var probes = 0
-            while(true) {
-                when (map[index].value) {
-                    NULL_KEY -> return NULL_VALUE
-                    key -> break
-                    else -> {
-                        if (++probes >= MAX_PROBES) return NULL_VALUE
-                        if (index == 0) index = map.size
-                        index -= 2
-                        continue
-                    }
-                }
+
+            var curKey = map[index].value
+            while (curKey != key) { // optimize for successful lookup
+                if (curKey == NULL_KEY) return NULL_VALUE // not found -- no value
+                if (++probes >= MAX_PROBES) return NULL_VALUE
+                if (index == 0) index = map.size
+                index -= 2
+                curKey = map[index].value
             }
 
             // found key -- find value
@@ -101,52 +97,41 @@ class IntIntHashMap {
             }
         }
 
-        fun putInternal(key: Int, value: Int): Int {
+        fun putInternal(key: Int, value: Int, isRehash: Boolean = false): Int {
             var index = index(key)
             var probes = 0
-
-            while (true) {
-                when (map[index].value) {
-                    NULL_KEY -> {
-                        // not found -- claim this slot
-                        if (value == DEL_VALUE) return NULL_VALUE // remove of missing item, no need to claim slot
-                        if (map[index].compareAndSet(NULL_KEY, key)) break
-                        else continue
-                    }
-                    key -> break
-                    else -> {
-                        if (++probes >= MAX_PROBES) return NEEDS_REHASH
-                        if (index == 0) index = map.size
-                        index -= 2
-                        continue
-                    }
+            while (true) { // optimize for successful lookup
+                val curKey = map[index].value
+                if (curKey == key) break
+                if (curKey == NULL_KEY) {
+                    // not found -- claim this slot
+                    if (value == DEL_VALUE) return NULL_VALUE // remove of missing item, no need to claim slot
+                    if (map[index].compareAndSet(NULL_KEY, key)) break
+                    else continue
                 }
+                if (++probes >= MAX_PROBES) return NEEDS_REHASH
+                if (index == 0) index = map.size
+                index -= 2
             }
 
             // found key -- update value
             while (true) {
                 val oldValue = map[index + 1].value
-                return when {
+                when {
+                    oldValue != NULL_VALUE && isRehash -> return NULL_VALUE
                     oldValue == TRANSFERRED_VALUE -> {
-                        next.value!!.putInternal(key, value)
-                        //next.value!!.putInternal(key, value)
+                        return NEEDS_REHASH
                     }
 
                     oldValue < 0 -> {
-                        val setValue = if (value != DEL_VALUE) -value else NULL_VALUE
-
-                        if (!map[index + 1].compareAndSet(oldValue, setValue)) continue
-                        -oldValue
+                        return NEEDS_REHASH
                     }
 
                     else -> {
-                        if (value != DEL_VALUE) {
-                            if (!map[index + 1].compareAndSet(oldValue, value)) continue
+                        if (!map[index+1].compareAndSet(oldValue, value)) {
+                            continue
                         }
-                        else {
-                            if (!map[index + 1].compareAndSet(oldValue, NULL_VALUE)) continue
-                        }
-                        oldValue
+                        return oldValue
                     }
                 }
             }
@@ -160,19 +145,17 @@ class IntIntHashMap {
             // for each cell in map perform transfer
             var index = 0
             while (index < map.size) {
-                // get up-to-date core
-                val nextCore = next.value!!
-
                 // get current key and value
                 val curKey = map[index].value
                 val curValue = map[index+1].value
                 when {
                     // value already transferred
                     curValue == TRANSFERRED_VALUE -> {
-                        break
+                        index += 2
+                        continue
                     }
                     // empty cell, no physical transfer needed
-                    curValue == NULL_VALUE -> {
+                    curValue == NULL_VALUE || curValue == DEL_VALUE -> {
                         map[index + 1].compareAndSet(curValue, TRANSFERRED_VALUE)
                         continue
                     }
@@ -188,24 +171,21 @@ class IntIntHashMap {
                         // put pair in next core
                         // on failure update next to new core
                         while (true) {
-                            val result = nextCore.putInternal(curKey, -curValue)
+                            val nextCore = next.value!!
+                            val result = nextCore.putInternal(curKey, -curValue, isRehash = true)
                             if (result != NEEDS_REHASH) break
                             next.compareAndSet(nextCore, nextCore.rehash())
                             continue
                         }
 
-                        // mark next values
+                        // mark next values as transferred
                         map[index+1].compareAndSet(curValue, TRANSFERRED_VALUE)
-                        if (map[index+1].value == TRANSFERRED_VALUE) break
 
                         continue
                     }
                 }
                 index += 2
             }
-            //var state = ""
-            //(0 until map.size).forEach {i -> state = state + next.value!!.map[i].value + ", " }
-            //Logger.getLogger("core").log(Level.INFO, state)
             return next.value!!
         }
 
