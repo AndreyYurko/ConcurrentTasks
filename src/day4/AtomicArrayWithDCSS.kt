@@ -88,20 +88,6 @@ class AtomicArrayWithDCSS<E : Any>(size: Int, initialValue: E) {
         fun applyOperation() {
             while (true) {
 
-                when (val resultValue = array[index1].value) {
-                    this -> {
-                        // do nothing, continue to perform operation
-                    }
-                    is AtomicArrayWithDCSS<*>.DCSSDescriptor<*> -> {
-                        resultValue.applyOperation()
-                        continue
-                    }
-                    else -> {
-                        status.compareAndSet(Status.UNDECIDED, Status.FAILED)
-                        break
-                    }
-                }
-
                 val secondValue = when (val curValue = array[index2].value) {
                     is AtomicArrayWithDCSS<*>.DCSSDescriptor<*> -> {
                         if (curValue.status.value == Status.SUCCESS) curValue.update1

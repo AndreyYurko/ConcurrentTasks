@@ -166,7 +166,7 @@ class IntIntHashMap {
                         continue
                     }
                     // physically transfer value
-                    curValue < 0 -> {
+                    else -> {
 
                         // put pair in next core
                         // on failure update next to new core
@@ -184,7 +184,6 @@ class IntIntHashMap {
                         continue
                     }
                 }
-                index += 2
             }
             return next.value!!
         }
